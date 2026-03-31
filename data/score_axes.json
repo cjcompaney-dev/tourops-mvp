@@ -1,0 +1,16 @@
+[
+  { "axis_id": "A", "name": "供給安定性",    "color": "#1D9E75" },
+  { "axis_id": "B", "name": "品質再現性",    "color": "#534AB7" },
+  { "axis_id": "C", "name": "B2B対応力",     "color": "#D85A30" },
+  { "axis_id": "D", "name": "オペ柔軟性",    "color": "#BA7517" },
+  { "axis_id": "E", "name": "商品設計柔軟性","color": "#185FA5" },
+  { "axis_id": "F", "name": "ブランド認知",  "color": "#3B6D11" },
+  { "axis_id": "G", "name": "レビュー資産",  "color": "#E24B4A" },
+  { "axis_id": "H", "name": "収益性",        "color": "#BA7517" },
+  { "axis_id": "I", "name": "スケーラビリティ","color": "#534AB7" },
+  { "axis_id": "J", "name": "チャネル支配力","color": "#1D9E75" },
+  { "axis_id": "L", "name": "規模proxy",     "color": "#888780" },
+  { "axis_id": "O", "name": "主力商品一致度","color": "#D85A30" },
+  { "axis_id": "M", "name": "主要商品カテゴリ","color": "#888780" },
+  { "axis_id": "N", "name": "事業モデル",    "color": "#888780" }
+]

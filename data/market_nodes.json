@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1", "parent_id": null, "level": 0,
+    "name": "世界旅行市場 総経済規模",
+    "value_億円": 1614600, "market_type": "TAM",
+    "seejay_flag": null, "memo": "US$10.9兆（約1,614,600億円・1USD=148円換算）"
+  },
+  {
+    "id": "2", "parent_id": "1", "level": 1,
+    "name": "日本向け需要市場（国内実消費）",
+    "value_億円": 94600, "market_type": "SAM",
+    "seejay_flag": null, "memo": "9.46兆円。2025年訪日外国人旅行消費額"
+  },
+  {
+    "id": "3", "parent_id": "2", "level": 2,
+    "name": "英語コア市場 総旅行消費",
+    "value_億円": 24326, "market_type": "TAM",
+    "seejay_flag": null, "memo": "米・豪・英・加・シンガポール・フィリピン・インド 2025年"
+  },
+  {
+    "id": "4", "parent_id": "3", "level": 3,
+    "name": "英語コア市場 娯楽等サービス費",
+    "value_億円": 1252, "market_type": "SAM",
+    "seejay_flag": null, "memo": "観光庁定義の娯楽等サービス費。現地ツアー・ガイドを含む"
+  },
+  {
+    "id": "5", "parent_id": "4", "level": 4,
+    "name": "英語プライベートツアー市場（推計）",
+    "value_億円": 438, "market_type": "SOM",
+    "seejay_flag": "target", "memo": "保守310〜強気560億円・基準438億円。成長率+15.8%/年"
+  },
+  {
+    "id": "6", "parent_id": "5", "level": 5,
+    "name": "東京・京都・大阪 英語プライベートツアー",
+    "value_億円": null, "market_type": "sub",
+    "seejay_flag": "current", "memo": "See Jayの現在の主戦場。要調査"
+  }
+]
