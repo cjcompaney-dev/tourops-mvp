@@ -49,17 +49,19 @@ export default function SalesPage() {
   useEffect(() => { fetchRecords() }, [fetchRecords])
 
   // ── CRUD ─────────────────────────────────────────────────
-  async function handleSave(input: SalesInput) {
-    if (modal === 'edit' && editing) {
-      const { error } = await supabase.from('sales_records').update(input).eq('id', editing.id)
-      if (error) { alert('更新エラー: ' + error.message); return }
-    } else {
-      const { error } = await supabase.from('sales_records').insert(input)
-      if (error) { alert('追加エラー: ' + error.message); return }
-    }
-    setModal(null); setEditing(null)
-    fetchRecords()
+async function handleSave(input: SalesInput) {
+  // gross_profit は DB 側の generated カラムのため送信対象から除外
+  const { gross_profit, ...safeInput } = input as any
+  if (modal === 'edit' && editing) {
+    const { error } = await supabase.from('sales_records').update(safeInput).eq('id', editing.id)
+    if (error) { alert('更新エラー: ' + error.message); return }
+  } else {
+    const { error } = await supabase.from('sales_records').insert(safeInput)
+    if (error) { alert('追加エラー: ' + error.message); return }
   }
+  setModal(null); setEditing(null)
+  fetchRecords()
+}
 
   async function handleDelete(id: string) {
     if (!confirm('この案件を削除しますか？')) return
