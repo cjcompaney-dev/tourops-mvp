@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { ReactNode } from 'react'
+import { supabase } from '../lib/supabase'
 
 const NAV = [
   { href: '/dashboard', label: 'ダッシュボード' },
@@ -10,11 +11,15 @@ const NAV = [
 ]
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { pathname } = useRouter()
+  const router = useRouter()
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* ヘッダー */}
       <header style={{
         background: '#1B2B4B', borderBottom: '1px solid rgba(255,255,255,0.08)',
         position: 'sticky', top: 0, zIndex: 50,
@@ -34,14 +39,14 @@ export default function Layout({ children }: { children: ReactNode }) {
           </Link>
 
           {/* ナビ */}
-          <nav style={{ display: 'flex', gap: 4 }}>
+          <nav style={{ display: 'flex', gap: 4, flex: 1 }}>
             {NAV.map(n => {
-              const active = pathname === n.href || pathname.startsWith(n.href + '/')
+              const active = router.pathname === n.href
               return (
                 <Link key={n.href} href={n.href} style={{
                   padding: '6px 14px', borderRadius: 6, fontSize: 13, fontWeight: 500,
-                  color:       active ? '#fff' : 'rgba(255,255,255,0.6)',
-                  background:  active ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color:      active ? '#fff' : 'rgba(255,255,255,0.6)',
+                  background: active ? 'rgba(255,255,255,0.12)' : 'transparent',
                   transition: 'all .15s',
                 }}>
                   {n.label}
@@ -49,10 +54,18 @@ export default function Layout({ children }: { children: ReactNode }) {
               )
             })}
           </nav>
+
+          {/* ログアウト */}
+          <button onClick={handleLogout} style={{
+            background: 'transparent', border: '1px solid rgba(255,255,255,0.2)',
+            color: 'rgba(255,255,255,0.6)', borderRadius: 6,
+            padding: '5px 12px', fontSize: 12, cursor: 'pointer',
+          }}>
+            ログアウト
+          </button>
         </div>
       </header>
 
-      {/* メインコンテンツ */}
       <main style={{ flex: 1, maxWidth: 1280, margin: '0 auto', width: '100%', padding: '24px 20px' }}>
         {children}
       </main>
