@@ -1,0 +1,258 @@
+/**
+ * lib/validation.ts
+ * 売上台帳・レビュー台帳・キャンセルの全バリデーションロジック
+ * フォームとDB両方から呼べるよう、Supabase依存なし・純粋関数で記述
+ */
+
+import { SalesInput, ReviewInput, ValidationResult } from '../types'
+
+// ─── 表記ゆれマップ ────────────────────────────────────────
+const PARTNER_VARIANTS: Record<string, string[]> = {
+  'Tourist Japan':      ['TI Tours', 'ti tours', 'tourist japan'],
+  'Teahouse Trails LLC':['Tea house tours', 'tea house tours', 'teahouse trails'],
+  '株式会社レイライン':  ['Ray Line', 'ray line', 'Rayline'],
+}
+
+// ─── 売上台帳バリデーション ────────────────────────────────
+export function validateSales(
+  input: SalesInput,
+  existingRecords: { tour_date: string; case_name: string; partner_name: string; guide_name: string; id?: string }[],
+  editingId?: string
+): ValidationResult {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // A. 必須入力チェック
+  if (!input.tour_date)    errors.push('実施日は必須です')
+  if (!input.case_name?.trim())    errors.push('案件名は必須です')
+  if (!input.partner_name?.trim()) errors.push('取引先名は必須です')
+  if (!input.guide_name?.trim())   errors.push('ガイド名は必須です')
+
+  if (input.record_type === 'normal') {
+    if (input.revenue == null || input.revenue === undefined)
+      errors.push('通常案件は売上金額が必須です')
+    if (input.guide_fee == null || input.guide_fee === undefined)
+      errors.push('通常案件はガイド費が必須です')
+  }
+
+  // B. 型・範囲チェック
+  if (input.pax != null && (input.pax < 1 || !Number.isInteger(input.pax)))
+    errors.push('参加人数は1以上の整数で入力してください')
+
+  if (input.revenue != null && (input.revenue < 0 || !Number.isInteger(input.revenue)))
+    errors.push('売上金額は0以上の整数で入力してください')
+
+  if (input.guide_fee != null && (input.guide_fee < 0 || !Number.isInteger(input.guide_fee)))
+    errors.push('ガイド費は0以上の整数で入力してください')
+
+  const validStatuses = ['unpaid', 'partial', 'paid']
+  if (!validStatuses.includes(input.payment_status))
+    errors.push('入金状況の値が不正です')
+
+  const validTypes = ['normal', 'cancelled', 'training']
+  if (!validTypes.includes(input.record_type))
+    errors.push('レコード種別の値が不正です')
+
+  // C. 整合性チェック（警告）
+  if (input.payment_status === 'paid' && !input.revenue)
+    warnings.push('入金済みですが売上金額が空欄です')
+
+  if (input.payment_status === 'unpaid' && input.payment_date)
+    warnings.push('未入金ですが入金日が入力されています')
+
+  if (input.payment_date && input.payment_status === 'unpaid')
+    warnings.push('入金日が入力されていますが、入金状況が「未入金」のままです')
+
+  if (input.payment_method && input.payment_status === 'unpaid')
+    warnings.push('入金方法が入力されていますが、入金状況が「未入金」のままです')
+
+  if (input.revenue != null && input.guide_fee != null && input.guide_fee > input.revenue)
+    warnings.push(`ガイド費（¥${input.guide_fee.toLocaleString()}）が売上（¥${input.revenue.toLocaleString()}）を上回っています`)
+
+  if (input.revenue != null && input.guide_fee != null && (input.revenue - input.guide_fee) < 0)
+    warnings.push('粗利がマイナスになっています')
+
+  // E. 表記ゆれ警告
+  if (input.partner_name) {
+    const name = input.partner_name.trim()
+    for (const [canonical, variants] of Object.entries(PARTNER_VARIANTS)) {
+      if (variants.map(v => v.toLowerCase()).includes(name.toLowerCase())) {
+        warnings.push(`取引先名「${name}」は「${canonical}」の表記ゆれの可能性があります`)
+        break
+      }
+    }
+  }
+
+  // F. 重複チェック（警告）
+  if (input.tour_date && input.case_name && input.partner_name && input.guide_name) {
+    const dup = existingRecords.find(r =>
+      r.tour_date     === input.tour_date &&
+      r.case_name     === input.case_name &&
+      r.partner_name  === input.partner_name &&
+      r.guide_name    === input.guide_name &&
+      r.id !== editingId
+    )
+    if (dup) warnings.push('同じ日付・案件名・取引先・ガイドの記録が既に存在します（重複の可能性）')
+  }
+
+  return { errors, warnings }
+}
+
+// ─── レビュー台帳バリデーション ───────────────────────────
+export function validateReview(
+  input: ReviewInput,
+  salesRecords: { tour_date: string; case_name: string; partner_name: string; guide_name: string }[],
+  existingReviews: { tour_date: string; case_name: string; guide_name: string; id?: string }[],
+  editingId?: string
+): ValidationResult {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // A. 必須入力
+  if (!input.tour_date)            errors.push('実施日は必須です')
+  if (!input.case_name?.trim())    errors.push('案件名は必須です')
+  if (!input.partner_name?.trim()) errors.push('取引先名は必須です')
+  if (!input.guide_name?.trim())   errors.push('ガイド名は必須です')
+
+  if (input.has_review && (input.rating == null))
+    errors.push('レビュー取得済みの場合、評価（rating）は必須です')
+
+  // B. 型チェック
+  if (input.rating != null && (input.rating < 1 || input.rating > 5))
+    errors.push('評価は1〜5の範囲で入力してください')
+
+  // C. 整合性チェック（警告）
+  if (!input.has_review && (input.rating != null || input.review_text))
+    warnings.push('レビュー未取得ですが、評価またはレビュー本文が入力されています')
+
+  if (input.has_review && !input.good_points && !input.issues)
+    warnings.push('レビュー取得済みですが、良かった点・指摘事項がどちらも空欄です')
+
+  // 売上台帳との照合（警告）
+  if (input.tour_date && input.case_name && salesRecords.length > 0) {
+    const matched = salesRecords.find(s =>
+      s.tour_date    === input.tour_date &&
+      s.case_name    === input.case_name &&
+      s.guide_name   === input.guide_name
+    )
+    if (!matched) warnings.push('売上台帳に対応する案件が見つかりません。案件名・ガイド名・日付を確認してください')
+  }
+
+  // 重複チェック（警告）
+  if (input.tour_date && input.case_name && input.guide_name) {
+    const dup = existingReviews.find(r =>
+      r.tour_date  === input.tour_date &&
+      r.case_name  === input.case_name &&
+      r.guide_name === input.guide_name &&
+      r.id !== editingId
+    )
+    if (dup) warnings.push('同じ日付・案件名・ガイドのレビューが既に存在します（重複の可能性）')
+  }
+
+  return { errors, warnings }
+}
+
+// ─── キャンセル金額自動提案 ───────────────────────────────
+export interface CancelSuggestion {
+  partnerAmount:  number        // 取引先から徴収する提案額（円）
+  guideAmount:    number        // ガイドへ支払う提案額（円）
+  partnerTier:    string        // 適用したタイミング区分名
+  guideTier:      string        // 同上（ガイド側）
+  partnerRatePct: number | null // 適用率（%）
+  guideRatePct:   number | null // 同上（ガイド側）
+}
+
+export function suggestCancelAmount(
+  partnerName: string,
+  hoursBeforeStart: number | null,
+  originalRevenue: number,
+  originalGuideFee: number,
+  policies: {
+    target_type: string
+    target_name: string
+    tier_name: string
+    hours_before_min: number
+    hours_before_max: number | null
+    rate_pct: number
+  }[]
+): CancelSuggestion {
+  const hours = hoursBeforeStart ?? 0
+
+  // ポリシーを検索する内部関数
+  // target_name が一致するポリシーを優先、なければ __all_guides__ を使用
+  function findPolicy(targetType: string, name: string) {
+    // 名前一致を優先
+    const matched = policies.filter(p =>
+      p.target_type === targetType &&
+      p.target_name === name &&
+      hours >= p.hours_before_min &&
+      (p.hours_before_max === null || hours < p.hours_before_max)
+    )
+    if (matched.length > 0) return matched[0]
+
+    // 全ガイド共通ポリシーにフォールバック（guide のみ）
+    if (targetType === 'guide') {
+      const fallback = policies.filter(p =>
+        p.target_type === 'guide' &&
+        p.target_name === '__all_guides__' &&
+        hours >= p.hours_before_min &&
+        (p.hours_before_max === null || hours < p.hours_before_max)
+      )
+      if (fallback.length > 0) return fallback[0]
+    }
+    return null
+  }
+
+  const partnerPolicy = findPolicy('partner', partnerName)
+  const guidePolicy   = findPolicy('guide', '__all_guides__')
+
+  const partnerRatePct = partnerPolicy?.rate_pct ?? null
+  const guideRatePct   = guidePolicy?.rate_pct   ?? null
+
+  return {
+    partnerAmount:  partnerRatePct !== null ? Math.round(originalRevenue  * partnerRatePct / 100) : 0,
+    guideAmount:    guideRatePct   !== null ? Math.round(originalGuideFee * guideRatePct   / 100) : 0,
+    partnerTier:    partnerPolicy?.tier_name ?? '（ポリシーなし）',
+    guideTier:      guidePolicy?.tier_name   ?? '（ポリシーなし）',
+    partnerRatePct,
+    guideRatePct,
+  }
+}
+
+// ─── ダッシュボード警告集計 ───────────────────────────────
+export function computeDashboardAlerts(
+  sales: { payment_status: string; payment_date: string | null; payment_method: string; tour_date: string; case_name: string; partner_name: string; guide_name: string; record_type: string }[],
+  reviews: { has_review: boolean; rating: number | null }[],
+  cancellations: { sales_record_id: string | null }[],
+) {
+  // 未収件数
+  const unpaidCount = sales.filter(s => s.payment_status === 'unpaid').length
+
+  // 入金日とstatusの矛盾
+  const paymentMismatch = sales.filter(s =>
+    (s.payment_status === 'unpaid' && s.payment_date != null) ||
+    (s.payment_status === 'unpaid' && s.payment_method)
+  ).length
+
+  // 重複疑い（同日・同案件・同取引先・同ガイドが複数）
+  const seen = new Map<string, number>()
+  for (const s of sales) {
+    const key = `${s.tour_date}|${s.case_name}|${s.partner_name}|${s.guide_name}`
+    seen.set(key, (seen.get(key) ?? 0) + 1)
+  }
+  const salesDuplicates = [...seen.values()].filter(v => v > 1).length
+
+  // 低評価レビュー（3以下）
+  const lowRatingReviews = reviews.filter(r => r.rating != null && r.rating <= 3).length
+
+  // レビュー未取得
+  const reviewMissing = reviews.filter(r => !r.has_review).length
+
+  // キャンセル整合性エラー（cancellation_recordsがあるのにrecord_type!=cancelled）
+  const cancelledIds = new Set(sales.filter(s => s.record_type === 'cancelled').map((s: any) => s.id))
+  const cancelMismatch = cancellations.filter(c =>
+    c.sales_record_id && !cancelledIds.has(c.sales_record_id)
+  ).length
+
+  return { unpaidCount, paymentMismatch, salesDuplicates, lowRatingReviews, reviewMissing, cancelMismatch }
+}
