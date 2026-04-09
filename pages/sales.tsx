@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import Head from 'next/head'
 import { supabase } from '../lib/supabase'
-import { SalesRecord, SalesInput, PaymentStatus, RecordType, CancellationRecord } from '../types'
+import { SalesRecord, SalesInput, PaymentStatus, RecordType } from '../types'
 import SalesForm from '../components/sales/SalesForm'
-import CancellationModal from '../components/cancellation/CancellationModal'
 
 const PAYMENT_LABEL: Record<PaymentStatus, string> = {
   unpaid: '未入金', partial: '一部入金', paid: '入金済',
@@ -33,11 +32,6 @@ export default function SalesPage() {
   const [typeFilter,   setTypeFilter]   = useState<RecordType | ''>('')
   const [modal,        setModal]        = useState<'add' | 'edit' | null>(null)
   const [editing,      setEditing]      = useState<SalesRecord | null>(null)
-  const [cancelTarget, setCancelTarget] = useState<SalesRecord | null>(null)
-  const [cancelMode,   setCancelMode]   = useState<'new' | 'view'>('new')
-  const [cancelExisting, setCancelExisting] = useState<CancellationRecord | undefined>(undefined)
-  // cancelled 行ごとの登録済み実績を保持 { sales_record_id → CancellationRecord }
-  const [cancelMap, setCancelMap] = useState<Map<string, CancellationRecord>>(new Map())
 
   const fetchRecords = useCallback(async () => {
     setLoading(true)
@@ -61,25 +55,6 @@ export default function SalesPage() {
     // 重複チェック用に全件取得（月フィルタなし）
     const { data: all } = await supabase.from('sales_records').select('id,tour_date,case_name,partner_name,guide_name')
     setAllRecords((all ?? []) as any)
-
-    // cancelled 行の cancellation_records を一括取得してMapに格納
-    const cancelledIds = (data ?? [])
-      .filter((r: any) => r.record_type === 'cancelled')
-      .map((r: any) => r.id)
-    if (cancelledIds.length > 0) {
-      const { data: cData } = await supabase
-        .from('cancellation_records')
-        .select('*')
-        .in('sales_record_id', cancelledIds)
-      const map = new Map<string, CancellationRecord>()
-      for (const c of (cData ?? []) as CancellationRecord[]) {
-        if (c.sales_record_id) map.set(c.sales_record_id, c)
-      }
-      setCancelMap(map)
-    } else {
-      setCancelMap(new Map())
-    }
-
     setLoading(false)
   }, [month, statusFilter, typeFilter])
 
@@ -248,25 +223,9 @@ export default function SalesPage() {
                         )}
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: 6 }}>
                           <button className="btn btn-secondary btn-sm"
                             onClick={() => { setEditing(r); setModal('edit') }}>編集</button>
-                          {r.record_type === 'cancelled' && (() => {
-                            const cr = cancelMap.get(r.id)
-                            return cr ? (
-                              <button className="btn btn-secondary btn-sm"
-                                style={{ color: '#15803D', borderColor: '#BBF7D0', background: '#F0FDF4' }}
-                                onClick={() => { setCancelTarget(r); setCancelMode('view'); setCancelExisting(cr) }}>
-                                ✓ キャンセル登録済み
-                              </button>
-                            ) : (
-                              <button className="btn btn-secondary btn-sm"
-                                style={{ color: '#B45309', borderColor: '#FDE68A' }}
-                                onClick={() => { setCancelTarget(r); setCancelMode('new'); setCancelExisting(undefined) }}>
-                                キャンセル登録
-                              </button>
-                            )
-                          })()}
                           <button className="btn btn-danger btn-sm"
                             onClick={() => handleDelete(r.id)}>削除</button>
                         </div>
@@ -280,7 +239,7 @@ export default function SalesPage() {
         )}
       </div>
 
-      {/* SalesForm モーダル */}
+      {/* モーダル */}
       {modal && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
           <div className="modal">
@@ -294,17 +253,6 @@ export default function SalesPage() {
             />
           </div>
         </div>
-      )}
-
-      {/* キャンセル登録モーダル */}
-      {cancelTarget && (
-        <CancellationModal
-          salesRecord={cancelTarget}
-          mode={cancelMode}
-          existing={cancelExisting}
-          onSaved={() => { setCancelTarget(null); fetchRecords() }}
-          onCancel={() => setCancelTarget(null)}
-        />
       )}
     </>
   )
