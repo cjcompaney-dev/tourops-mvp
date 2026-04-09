@@ -29,7 +29,6 @@ function KpiCard({ label, value, sub, color = '#2563EB' }: {
   )
 }
 
-// 警告カード（件数バッジ付き）
 function AlertCard({ count, label, href, level }: {
   count: number; label: string; href: string; level: 'danger' | 'warning' | 'ok'
 }) {
@@ -44,14 +43,11 @@ function AlertCard({ count, label, href, level }: {
       <div style={{
         padding: '14px 16px', borderRadius: 10,
         background: s.bg, border: `1px solid ${s.border}`,
-        display: 'flex', alignItems: 'center', gap: 14,
-        cursor: 'pointer', transition: 'opacity .15s',
+        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
       }}>
         <div style={{
-          width: 36, height: 36, borderRadius: 8,
-          background: s.dot + '22',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
+          width: 36, height: 36, borderRadius: 8, background: s.dot + '22',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
           <span style={{ fontSize: 18, color: s.dot }}>
             {level === 'ok' ? '✓' : level === 'danger' ? '⚠' : '!'}
@@ -77,7 +73,6 @@ function last6Months(): string[] {
   }
   return months
 }
-
 function monthLabel(ym: string) {
   const [, m] = ym.split('-')
   return `${parseInt(m)}月`
@@ -86,38 +81,40 @@ function monthLabel(ym: string) {
 export default function DashboardPage() {
   const [sales,         setSales]         = useState<SalesRecord[]>([])
   const [reviews,       setReviews]       = useState<ReviewRecord[]>([])
-  const [allSales,      setAllSales]      = useState<SalesRecord[]>([])  // 警告用全件
-  const [allReviews,    setAllReviews]    = useState<ReviewRecord[]>([]) // 警告用全件
+  const [allSales,      setAllSales]      = useState<SalesRecord[]>([])
+  const [allReviews,    setAllReviews]    = useState<ReviewRecord[]>([])
   const [cancellations, setCancellations] = useState<{sales_record_id: string|null}[]>([])
   const [loading,       setLoading]       = useState(true)
   const [alerts,        setAlerts]        = useState<DashboardAlert | null>(null)
+  // 期間フィルター
+  const [dateFrom,      setDateFrom]      = useState('')
+  const [dateTo,        setDateTo]        = useState('')
 
   const now = new Date()
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`
+  const usingDateRange = !!(dateFrom || dateTo)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
 
+      // グラフ用：直近6ヶ月（常に取得）
       const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
-      const start = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth()+1).padStart(2,'0')}-01`
+      const start6m = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth()+1).padStart(2,'0')}-01`
 
       const [s, r, sAll, rAll, c] = await Promise.all([
-        // グラフ用（直近6ヶ月）
-        supabase.from('sales_records').select('*').gte('tour_date', start),
-        supabase.from('review_records').select('*').gte('tour_date', start),
-        // 警告用（全件）
+        supabase.from('sales_records').select('*').gte('tour_date', start6m),
+        supabase.from('review_records').select('*').gte('tour_date', start6m),
         supabase.from('sales_records').select('id,tour_date,case_name,partner_name,guide_name,payment_status,payment_date,payment_method,record_type,revenue'),
         supabase.from('review_records').select('id,has_review,rating'),
-        // キャンセル実績（テーブルがない場合はエラーを無視）
         supabase.from('cancellation_records').select('sales_record_id').limit(500),
       ])
 
-      const salesData   = s.data   as SalesRecord[] ?? []
-      const reviewData  = r.data   as ReviewRecord[] ?? []
-      const allSalesData  = sAll.data as SalesRecord[] ?? []
-      const allReviewData = rAll.data as ReviewRecord[] ?? []
-      const cancelData    = c.error ? [] : (c.data ?? []) as {sales_record_id: string|null}[]
+      const salesData    = s.data   as SalesRecord[] ?? []
+      const reviewData   = r.data   as ReviewRecord[] ?? []
+      const allSalesData   = sAll.data as SalesRecord[] ?? []
+      const allReviewData  = rAll.data as ReviewRecord[] ?? []
+      const cancelData     = c.error ? [] : (c.data ?? []) as {sales_record_id: string|null}[]
 
       setSales(salesData)
       setReviews(reviewData)
@@ -125,7 +122,6 @@ export default function DashboardPage() {
       setAllReviews(allReviewData)
       setCancellations(cancelData)
 
-      // 警告集計
       setAlerts(computeDashboardAlerts(
         allSalesData.map(s => ({
           id:             (s as any).id,
@@ -139,13 +135,9 @@ export default function DashboardPage() {
           record_type:    (s as any).record_type ?? 'normal',
           revenue:        s.revenue,
         })),
-        allReviewData.map(r => ({
-          has_review: r.has_review,
-          rating:     r.rating,
-        })),
+        allReviewData.map(r => ({ has_review: r.has_review, rating: r.rating })),
         cancelData,
       ))
-
       setLoading(false)
     }
     load()
@@ -155,31 +147,47 @@ export default function DashboardPage() {
     <div style={{ padding: 60, textAlign: 'center', color: '#9CA3AF' }}>読み込み中...</div>
   )
 
-  // 今月集計
-  const thisMonthSales   = sales.filter(r => r.tour_date.startsWith(currentMonth))
-  const thisMonthReviews = reviews.filter(r => r.tour_date.startsWith(currentMonth))
+  // 期間フィルターで絞り込んだデータ
+  const filteredSales = usingDateRange
+    ? allSales.filter(r => {
+        const d = r.tour_date
+        return (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo)
+      })
+    : sales.filter(r => r.tour_date.startsWith(currentMonth))
 
-  const totalRevenue     = thisMonthSales.reduce((s, r) => s + (r.revenue ?? 0), 0)
-  const totalGrossProfit = thisMonthSales.reduce((s, r) => s + (r.gross_profit ?? 0), 0)
+  const filteredReviews = usingDateRange
+    ? allReviews.filter((r: any) => {
+        const d = (r as any).tour_date
+        return d && (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo)
+      })
+    : reviews.filter(r => r.tour_date.startsWith(currentMonth))
+
+  // KPI集計
+  const totalRevenue     = filteredSales.reduce((s, r) => s + (r.revenue ?? 0), 0)
+  const totalGrossProfit = filteredSales.reduce((s, r) => s + ((r as any).gross_profit ?? 0), 0)
   const grossMargin      = totalRevenue > 0 ? Math.round(totalGrossProfit / totalRevenue * 100) : 0
-  const tourCount        = thisMonthSales.length
+  const tourCount        = filteredSales.length
   const avgPrice         = tourCount > 0 ? Math.round(totalRevenue / tourCount) : 0
-  const unpaidAmount     = thisMonthSales
+  const unpaidAmount     = filteredSales
     .filter(r => r.payment_status !== 'paid').reduce((s, r) => s + (r.revenue ?? 0), 0)
-  const reviewTotal      = thisMonthReviews.length
-  const reviewCount      = thisMonthReviews.filter(r => r.has_review).length
+  const reviewTotal      = filteredReviews.length
+  const reviewCount      = (filteredReviews as any[]).filter((r: any) => r.has_review).length
   const reviewRate       = reviewTotal > 0 ? Math.round(reviewCount / reviewTotal * 100) : 0
 
-  // グラフ
+  // グラフデータ（常に直近6ヶ月ベース）
   const months = last6Months()
   const chartData = months.map(ym => {
     const ms  = sales.filter(r => r.tour_date.startsWith(ym))
     const mr  = reviews.filter(r => r.tour_date.startsWith(ym))
     const rev = ms.reduce((s, r) => s + (r.revenue ?? 0), 0)
-    const gp  = ms.reduce((s, r) => s + (r.gross_profit ?? 0), 0)
+    const gp  = ms.reduce((s, r) => s + ((r as any).gross_profit ?? 0), 0)
     const rt  = mr.length > 0 ? Math.round(mr.filter(r=>r.has_review).length / mr.length * 100) : 0
     return { month: monthLabel(ym), 売上: rev, 粗利: gp, レビュー取得率: rt }
   })
+
+  const periodLabel = usingDateRange
+    ? `${dateFrom || '—'} 〜 ${dateTo || '—'}`
+    : `${now.getFullYear()}年${now.getMonth()+1}月`
 
   return (
     <>
@@ -187,22 +195,36 @@ export default function DashboardPage() {
 
       <div className="page-header">
         <h1 className="page-title">ダッシュボード</h1>
-        <span style={{ fontSize: 13, color: '#6B7280' }}>
-          {now.getFullYear()}年{now.getMonth()+1}月
-        </span>
+        {/* 期間フィルター */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="date" className="input" value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)} style={{ width: 140, fontSize: 13 }} />
+          <span style={{ color: '#9CA3AF', fontSize: 13 }}>〜</span>
+          <input type="date" className="input" value={dateTo}
+            onChange={e => setDateTo(e.target.value)} style={{ width: 140, fontSize: 13 }} />
+          {usingDateRange && (
+            <button className="btn btn-secondary btn-sm"
+              onClick={() => { setDateFrom(''); setDateTo('') }}>クリア</button>
+          )}
+        </div>
       </div>
 
-      {/* ── KPIカード ── */}
+      {/* 期間ラベル */}
+      <div style={{ fontSize: 13, color: usingDateRange ? '#2563EB' : '#6B7280', marginBottom: 16 }}>
+        {usingDateRange ? `📅 期間指定中: ${periodLabel}` : `今月 (${periodLabel})`}
+      </div>
+
+      {/* KPIカード */}
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
         gap: 12, marginBottom: 24,
       }}>
-        <KpiCard label="月次売上"     value={fmt(totalRevenue)}     sub={`${tourCount}件`} />
-        <KpiCard label="月次粗利"     value={fmt(totalGrossProfit)}
+        <KpiCard label="売上"       value={fmt(totalRevenue)}     sub={`${tourCount}件`} />
+        <KpiCard label="粗利"       value={fmt(totalGrossProfit)}
           sub={`粗利率 ${grossMargin}%`}
           color={totalGrossProfit >= 0 ? '#15803D' : '#DC2626'} />
-        <KpiCard label="ツアー件数"   value={`${tourCount}件`} />
-        <KpiCard label="平均単価"     value={avgPrice > 0 ? fmt(avgPrice) : '—'} />
+        <KpiCard label="ツアー件数" value={`${tourCount}件`} />
+        <KpiCard label="平均単価"   value={avgPrice > 0 ? fmt(avgPrice) : '—'} />
         <KpiCard label="未収金"
           value={unpaidAmount > 0 ? fmt(unpaidAmount) : '¥0'}
           color={unpaidAmount > 0 ? '#DC2626' : '#15803D'}
@@ -212,61 +234,25 @@ export default function DashboardPage() {
           color={reviewRate >= 60 ? '#15803D' : reviewRate >= 40 ? '#B45309' : '#DC2626'} />
       </div>
 
-      {/* ── 警告カード ── */}
+      {/* 警告カード（全期間ベース） */}
       {alerts && (
         <div style={{ marginBottom: 24 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 10 }}>
             データ品質チェック
-            <span style={{ fontSize: 11, fontWeight: 400, color: '#9CA3AF', marginLeft: 8 }}>
-              全期間
-            </span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: '#9CA3AF', marginLeft: 8 }}>全期間</span>
           </div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 10,
-          }}>
-            <AlertCard
-              count={alerts.unpaidCount}
-              label="未収案件"
-              href="/sales"
-              level={alerts.unpaidCount > 0 ? 'warning' : 'ok'}
-            />
-            <AlertCard
-              count={alerts.paymentMismatch}
-              label="入金情報の矛盾"
-              href="/sales"
-              level={alerts.paymentMismatch > 0 ? 'danger' : 'ok'}
-            />
-            <AlertCard
-              count={alerts.salesDuplicates}
-              label="重複疑い（売上台帳）"
-              href="/sales"
-              level={alerts.salesDuplicates > 0 ? 'warning' : 'ok'}
-            />
-            <AlertCard
-              count={alerts.lowRatingReviews}
-              label="低評価レビュー（★3以下）"
-              href="/reviews"
-              level={alerts.lowRatingReviews > 0 ? 'warning' : 'ok'}
-            />
-            <AlertCard
-              count={alerts.reviewMissing}
-              label="レビュー未回収"
-              href="/reviews"
-              level={alerts.reviewMissing > 10 ? 'warning' : 'ok'}
-            />
-            <AlertCard
-              count={alerts.cancelMismatch}
-              label="キャンセル整合性エラー"
-              href="/sales"
-              level={alerts.cancelMismatch > 0 ? 'danger' : 'ok'}
-            />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+            <AlertCard count={alerts.unpaidCount}      label="未収案件"              href="/sales"   level={alerts.unpaidCount > 0 ? 'warning' : 'ok'} />
+            <AlertCard count={alerts.paymentMismatch}  label="入金情報の矛盾"        href="/sales"   level={alerts.paymentMismatch > 0 ? 'danger' : 'ok'} />
+            <AlertCard count={alerts.salesDuplicates}  label="重複疑い（売上台帳）"  href="/sales"   level={alerts.salesDuplicates > 0 ? 'warning' : 'ok'} />
+            <AlertCard count={alerts.lowRatingReviews} label="低評価レビュー（★3以下）" href="/reviews" level={alerts.lowRatingReviews > 0 ? 'warning' : 'ok'} />
+            <AlertCard count={alerts.reviewMissing}    label="レビュー未回収"        href="/reviews" level={alerts.reviewMissing > 10 ? 'warning' : 'ok'} />
+            <AlertCard count={alerts.cancelMismatch}   label="キャンセル整合性エラー" href="/sales"  level={alerts.cancelMismatch > 0 ? 'danger' : 'ok'} />
           </div>
         </div>
       )}
 
-      {/* ── グラフ ── */}
+      {/* グラフ（直近6ヶ月固定） */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
         <div className="card">
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16 }}>月次売上・粗利（直近6ヶ月）</div>
@@ -282,7 +268,6 @@ export default function DashboardPage() {
             </BarChart>
           </ResponsiveContainer>
         </div>
-
         <div className="card">
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16 }}>レビュー取得率推移（直近6ヶ月）</div>
           <ResponsiveContainer width="100%" height={200}>
@@ -291,19 +276,18 @@ export default function DashboardPage() {
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis domain={[0,100]} tickFormatter={v=>`${v}%`} tick={{ fontSize: 11 }} width={40} />
               <Tooltip formatter={(v: number) => `${v}%`} />
-              <Line type="monotone" dataKey="レビュー取得率" stroke="#2563EB"
-                strokeWidth={2} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="レビュー取得率" stroke="#2563EB" strokeWidth={2} dot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* ── 直近案件 ── */}
-      {thisMonthSales.length > 0 && (
+      {/* 直近案件 */}
+      {filteredSales.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '14px 16px', fontWeight: 600, fontSize: 13,
             borderBottom: '1px solid var(--border)' }}>
-            今月の案件（直近5件）
+            {usingDateRange ? `期間内の案件（直近5件）` : '今月の案件（直近5件）'}
           </div>
           <div className="table-wrap">
             <table>
@@ -316,15 +300,15 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {thisMonthSales.slice(0, 5).map(r => (
+                {filteredSales.slice(0, 5).map(r => (
                   <tr key={r.id}>
                     <td style={{ whiteSpace: 'nowrap' }}>{r.tour_date}</td>
                     <td>{r.case_name}</td>
                     <td style={{ color: '#6B7280' }}>{r.guide_name || '—'}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(r.revenue ?? 0)}</td>
                     <td style={{ textAlign: 'right',
-                      color: (r.gross_profit ?? 0) >= 0 ? '#15803D' : '#DC2626' }}>
-                      {fmt(r.gross_profit ?? 0)}
+                      color: ((r as any).gross_profit ?? 0) >= 0 ? '#15803D' : '#DC2626' }}>
+                      {fmt((r as any).gross_profit ?? 0)}
                     </td>
                     <td>
                       <span className={`badge ${
@@ -343,17 +327,17 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {thisMonthSales.length === 0 && (
+      {filteredSales.length === 0 && (
         <div className="card" style={{
           textAlign: 'center', padding: '48px 24px',
           background: 'linear-gradient(135deg, rgba(27,43,75,0.03), rgba(37,99,235,0.03))',
           border: '1px dashed var(--border)',
         }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 8 }}>
-            今月のデータがまだありません
+            {usingDateRange ? '指定期間のデータがありません' : '今月のデータがまだありません'}
           </div>
           <div style={{ fontSize: 13, color: '#6B7280' }}>
-            売上台帳にデータを入力するとグラフとKPIが表示されます
+            {usingDateRange ? '期間を変更してください' : '売上台帳にデータを入力するとグラフとKPIが表示されます'}
           </div>
         </div>
       )}

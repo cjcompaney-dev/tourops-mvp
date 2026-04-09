@@ -1,74 +1,58 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { SalesRecord, CancelPolicy, CancellationRecord, CancellationInput } from '../../types'
+import { SalesRecord, CancelPolicy, CancellationInput } from '../../types'
 import { suggestCancelAmount } from '../../lib/validation'
 
 interface Props {
-  salesRecord: SalesRecord
-  // mode='new'  → 新規登録フォーム
-  // mode='view' → 登録済み内容の確認表示
-  mode: 'new' | 'view'
-  // mode='view' のとき渡す既存レコード
-  existing?: CancellationRecord
+  salesRecord: SalesRecord   // 元のキャンセル案件（sales_records の1行）
   onSaved: () => void
   onCancel: () => void
 }
 
 const fmt = (n: number) => `¥${n.toLocaleString()}`
 
-// 取引先からの徴収状況ラベル
-const COLLECTION_LABELS: Record<string, string> = {
+const STATUS_LABELS = {
   unpaid: '未収',
-  paid:   '徴収済み',
+  paid:   '徴収済',
   waived: '免除',
 }
 
-// ガイドへの支払い状況ラベル（修正1）
-const PAYMENT_LABELS: Record<string, string> = {
-  unpaid: '未払い',
-  paid:   '支払い済み',
-  waived: '支払不要',
-}
-
-export default function CancellationModal({ salesRecord, mode, existing, onSaved, onCancel }: Props) {
+export default function CancellationModal({ salesRecord, onSaved, onCancel }: Props) {
   const [policies,  setPolicies]  = useState<CancelPolicy[]>([])
   const [loading,   setLoading]   = useState(true)
   const [saving,    setSaving]    = useState(false)
   const [error,     setError]     = useState('')
 
-  // フォーム state（新規登録用）
-  const [cancelledAt,      setCancelledAt]      = useState(
-    existing?.cancelled_at ?? new Date().toISOString().slice(0, 10)
-  )
-  const [hoursBeforeStart, setHoursBeforeStart] = useState<number | ''>(
-    existing?.hours_before_start ?? ''
-  )
-  const [revenueCollected, setRevenueCollected] = useState<number>(existing?.revenue_collected ?? 0)
-  const [guideFeePaid,     setGuideFeePaid]     = useState<number>(existing?.guide_fee_paid ?? 0)
-  const [collectionStatus, setCollectionStatus] = useState<'unpaid'|'paid'|'waived'>(
-    existing?.collection_status ?? 'unpaid'
-  )
-  const [paymentStatus,    setPaymentStatus]    = useState<'unpaid'|'paid'|'waived'>(
-    existing?.payment_status ?? 'unpaid'
-  )
-  const [notes, setNotes] = useState(existing?.notes ?? '')
+  // フォーム state
+  const [cancelledAt,       setCancelledAt]       = useState(new Date().toISOString().slice(0, 10))
+  const [hoursBeforeStart,  setHoursBeforeStart]  = useState<number | ''>('')
+  const [revenueCollected,  setRevenueCollected]  = useState<number>(0)
+  const [guideFeePaid,      setGuideFeePaid]       = useState<number>(0)
+  const [collectionStatus,  setCollectionStatus]  = useState<'unpaid' | 'paid' | 'waived'>('unpaid')
+  const [paymentStatus,     setPaymentStatus]      = useState<'unpaid' | 'paid' | 'waived'>('unpaid')
+  const [notes,             setNotes]             = useState('')
 
   // 提案値
-  const [suggestion,        setSuggestion]        = useState<ReturnType<typeof suggestCancelAmount> | null>(null)
+  const [suggestion, setSuggestion] = useState<ReturnType<typeof suggestCancelAmount> | null>(null)
   const [suggestionApplied, setSuggestionApplied] = useState(false)
 
   // ポリシー取得
   useEffect(() => {
-    supabase.from('cancel_policies').select('*').then(({ data, error }) => {
-      if (!error) setPolicies((data ?? []) as CancelPolicy[])
-      setLoading(false)
-    })
+    supabase
+      .from('cancel_policies')
+      .select('*')
+      .then(({ data, error }) => {
+        if (!error) setPolicies((data ?? []) as CancelPolicy[])
+        setLoading(false)
+      })
   }, [])
 
-  // hours_before_start が変わるたびに提案額を再計算（新規モードのみ）
+  // hours_before_start が変わるたびに提案額を再計算
   useEffect(() => {
-    if (mode !== 'new') return
-    if (hoursBeforeStart === '' || policies.length === 0) { setSuggestion(null); return }
+    if (hoursBeforeStart === '' || policies.length === 0) {
+      setSuggestion(null)
+      return
+    }
     const s = suggestCancelAmount(
       salesRecord.partner_name,
       Number(hoursBeforeStart),
@@ -78,9 +62,10 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
     )
     setSuggestion(s)
     setSuggestionApplied(false)
-  }, [hoursBeforeStart, policies, mode])
+  }, [hoursBeforeStart, policies])
 
-  function applySuggestion() {
+  // 提案額を適用
+  function applysuggestion() {
     if (!suggestion) return
     setRevenueCollected(suggestion.partnerAmount)
     setGuideFeePaid(suggestion.guideAmount)
@@ -90,55 +75,49 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+
     if (!cancelledAt) { setError('キャンセル日は必須です'); return }
 
     setSaving(true)
     const input: CancellationInput = {
-      sales_record_id:      salesRecord.id,
-      tour_date:            salesRecord.tour_date,
-      cancelled_at:         cancelledAt,
-      hours_before_start:   hoursBeforeStart === '' ? null : Number(hoursBeforeStart),
-      partner_name:         salesRecord.partner_name,
-      guide_name:           salesRecord.guide_name,
-      original_revenue:     salesRecord.revenue ?? 0,
-      original_guide_fee:   salesRecord.guide_fee ?? 0,
-      revenue_collected:    revenueCollected,
-      guide_fee_paid:       guideFeePaid,
-      partner_policy_tier:  suggestion?.partnerTier ?? '',
+      sales_record_id:     salesRecord.id,
+      tour_date:           salesRecord.tour_date,
+      cancelled_at:        cancelledAt,
+      hours_before_start:  hoursBeforeStart === '' ? null : Number(hoursBeforeStart),
+      partner_name:        salesRecord.partner_name,
+      guide_name:          salesRecord.guide_name,
+      original_revenue:    salesRecord.revenue ?? 0,
+      original_guide_fee:  salesRecord.guide_fee ?? 0,
+      revenue_collected:   revenueCollected,
+      guide_fee_paid:      guideFeePaid,
+      partner_policy_tier: suggestion?.partnerTier ?? '',
       partner_rate_applied: suggestion?.partnerRatePct ?? null,
-      guide_policy_tier:    suggestion?.guideTier ?? '',
-      guide_rate_applied:   suggestion?.guideRatePct ?? null,
-      collection_status:    collectionStatus,
-      payment_status:       paymentStatus,
+      guide_policy_tier:   suggestion?.guideTier ?? '',
+      guide_rate_applied:  suggestion?.guideRatePct ?? null,
+      collection_status:   collectionStatus,
+      payment_status:      paymentStatus,
       notes,
     }
 
-    const { error: err } = await supabase.from('cancellation_records').insert(input)
+    const { error: insertError } = await supabase
+      .from('cancellation_records')
+      .insert(input)
+
     setSaving(false)
-    if (err) { setError('保存エラー: ' + err.message); return }
+
+    if (insertError) {
+      setError('保存エラー: ' + insertError.message)
+      return
+    }
     onSaved()
   }
-
-  // ── 確認モード（view）──────────────────────────────────
-  const isView = mode === 'view'
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
       <div className="modal" style={{ maxWidth: 600 }}>
-
         {/* ヘッダー */}
         <div style={{ marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <h2 className="modal-title" style={{ margin: 0 }}>
-              {isView ? 'キャンセル登録内容' : 'キャンセル実績を登録'}
-            </h2>
-            {isView && (
-              <span style={{
-                fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                background: '#DCFCE7', color: '#15803D', fontWeight: 600,
-              }}>登録済み</span>
-            )}
-          </div>
+          <h2 className="modal-title" style={{ marginBottom: 4 }}>キャンセル実績を登録</h2>
           <div style={{
             fontSize: 13, color: '#6B7280', padding: '8px 12px',
             background: '#FFF7ED', borderRadius: 8, border: '1px solid #FED7AA',
@@ -155,18 +134,10 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
 
         {loading ? (
           <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF' }}>読み込み中...</div>
-        ) : isView ? (
-          // ── 確認モードの表示 ─────────────────────────────
-          <ViewContent
-            existing={existing!}
-            collectionLabels={COLLECTION_LABELS}
-            paymentLabels={PAYMENT_LABELS}
-            onCancel={onCancel}
-          />
         ) : (
-          // ── 新規登録フォーム ──────────────────────────────
           <form onSubmit={handleSubmit}>
 
+            {/* ─── キャンセル日時 ─── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
               <div className="form-row">
                 <label className="label">キャンセル発生日 *</label>
@@ -185,7 +156,7 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
               </div>
             </div>
 
-            {/* ポリシー提案 */}
+            {/* ─── ポリシー提案 ─── */}
             {suggestion && (
               <div style={{
                 padding: '12px 14px', marginBottom: 14,
@@ -222,7 +193,7 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
                 </div>
                 <button type="button" className="btn btn-secondary btn-sm"
                   style={{ marginTop: 10 }}
-                  onClick={applySuggestion}>
+                  onClick={applysuggestion}>
                   {suggestionApplied ? '✓ 適用済み' : '↓ この金額を適用する'}
                 </button>
               </div>
@@ -238,7 +209,7 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
               </div>
             )}
 
-            {/* 実際の金額 */}
+            {/* ─── 実際の金額 ─── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
               <div className="form-row">
                 <label className="label">実際に徴収したキャンセル料（円）</label>
@@ -254,29 +225,29 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
               </div>
             </div>
 
-            {/* ステータス */}
+            {/* ─── ステータス ─── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
               <div className="form-row">
                 <label className="label">取引先からの徴収状況</label>
                 <select className="input" value={collectionStatus}
                   onChange={e => setCollectionStatus(e.target.value as any)}>
-                  {(Object.entries(COLLECTION_LABELS) as [string, string][]).map(([k, v]) => (
+                  {(Object.entries(STATUS_LABELS) as [string, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
                   ))}
                 </select>
               </div>
               <div className="form-row">
-                <label className="label">ガイドへの支払い状況</label>
+                <label className="label">ガイドへの支払状況</label>
                 <select className="input" value={paymentStatus}
                   onChange={e => setPaymentStatus(e.target.value as any)}>
-                  {(Object.entries(PAYMENT_LABELS) as [string, string][]).map(([k, v]) => (
+                  {(Object.entries(STATUS_LABELS) as [string, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {/* メモ */}
+            {/* ─── メモ ─── */}
             <div className="form-row">
               <label className="label">備考</label>
               <textarea className="input" rows={2}
@@ -286,6 +257,7 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
                 style={{ resize: 'vertical' }} />
             </div>
 
+            {/* エラー */}
             {error && (
               <div style={{
                 padding: '10px 12px', marginBottom: 12,
@@ -296,79 +268,17 @@ export default function CancellationModal({ salesRecord, mode, existing, onSaved
               </div>
             )}
 
+            {/* ボタン */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
-              <button type="button" className="btn btn-secondary" onClick={onCancel}>キャンセル</button>
+              <button type="button" className="btn btn-secondary" onClick={onCancel}>
+                キャンセル
+              </button>
               <button type="submit" className="btn btn-primary" disabled={saving}>
                 {saving ? '保存中...' : '登録する'}
               </button>
             </div>
           </form>
         )}
-      </div>
-    </div>
-  )
-}
-
-// ── 確認モード専用の表示コンポーネント ──────────────────────
-function ViewContent({
-  existing,
-  collectionLabels,
-  paymentLabels,
-  onCancel,
-}: {
-  existing: CancellationRecord
-  collectionLabels: Record<string, string>
-  paymentLabels: Record<string, string>
-  onCancel: () => void
-}) {
-  const row = (label: string, value: React.ReactNode) => (
-    <div style={{ display: 'flex', gap: 12, padding: '8px 0',
-      borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
-      <div style={{ width: 180, flexShrink: 0, color: '#6B7280', fontSize: 12 }}>{label}</div>
-      <div style={{ color: '#111827', fontWeight: 500 }}>{value}</div>
-    </div>
-  )
-
-  const badge = (label: string, color: string) => (
-    <span style={{
-      padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
-      background: color + '22', color,
-    }}>{label}</span>
-  )
-
-  const collectionColor = existing.collection_status === 'paid' ? '#15803D'
-    : existing.collection_status === 'waived' ? '#6B7280' : '#DC2626'
-  const paymentColor = existing.payment_status === 'paid' ? '#15803D'
-    : existing.payment_status === 'waived' ? '#6B7280' : '#B45309'
-
-  return (
-    <div>
-      {row('キャンセル発生日',   existing.cancelled_at)}
-      {row('ツアー開始何時間前', existing.hours_before_start != null
-        ? `${existing.hours_before_start}時間前` : '—')}
-      {row('適用ポリシー（取引先）', existing.partner_policy_tier
-        ? `${existing.partner_policy_tier}${existing.partner_rate_applied != null ? ` / ${existing.partner_rate_applied}%` : ''}` : '—')}
-      {row('適用ポリシー（ガイド）', existing.guide_policy_tier
-        ? `${existing.guide_policy_tier}${existing.guide_rate_applied != null ? ` / ${existing.guide_rate_applied}%` : ''}` : '—')}
-      {row('元の売上金額（基準）', `¥${(existing.original_revenue ?? 0).toLocaleString()}`)}
-      {row('元のガイド費（基準）', `¥${(existing.original_guide_fee ?? 0).toLocaleString()}`)}
-      {row('徴収したキャンセル料',
-        <span style={{ fontSize: 15, fontWeight: 700, color: '#1E40AF' }}>
-          ¥{(existing.revenue_collected ?? 0).toLocaleString()}
-        </span>)}
-      {row('支払ったキャンセル補償',
-        <span style={{ fontSize: 15, fontWeight: 700, color: '#1E40AF' }}>
-          ¥{(existing.guide_fee_paid ?? 0).toLocaleString()}
-        </span>)}
-      {row('取引先 徴収状況',
-        badge(collectionLabels[existing.collection_status] ?? existing.collection_status, collectionColor))}
-      {row('ガイド 支払い状況',
-        badge(paymentLabels[existing.payment_status] ?? existing.payment_status, paymentColor))}
-      {existing.notes && row('備考', existing.notes)}
-      {row('登録日時', existing.created_at?.slice(0, 16).replace('T', ' ') ?? '—')}
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-        <button className="btn btn-secondary" onClick={onCancel}>閉じる</button>
       </div>
     </div>
   )

@@ -27,51 +27,62 @@ interface Props {
 }
 
 export default function SalesForm({ initial, editingId, existingRecords, onSave, onCancel }: Props) {
-  const [form, setForm]     = useState<SalesInput>({ ...EMPTY, ...initial })
-  const [saving, setSaving] = useState(false)
-  const [validation, setValidation] = useState<ValidationResult>({ errors: [], warnings: [] })
+  const [form, setForm]       = useState<SalesInput>({ ...EMPTY, ...initial })
+  const [saving, setSaving]   = useState(false)
+  // submitted: 保存ボタンを押したかどうか（エラー表示のトリガー）
   const [submitted, setSubmitted] = useState(false)
+  const [validation, setValidation] = useState<ValidationResult>({ errors: [], warnings: [] })
 
   const set = (k: keyof SalesInput, v: any) => setForm(f => ({ ...f, [k]: v }))
 
+  // フォーム変更のたびにバリデーション（submitted後のみ）
   useEffect(() => {
     if (submitted) {
       setValidation(validateSales(form, existingRecords, editingId))
     }
-  }, [form, submitted])
+  }, [form, submitted, existingRecords, editingId])
 
   const grossProfit = (form.revenue ?? 0) - (form.guide_fee ?? 0)
   const grossMargin = (form.revenue ?? 0) > 0
-    ? Math.round(grossProfit / form.revenue * 100) : 0
+    ? Math.round(grossProfit / (form.revenue as number) * 100) : 0
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitted(true)
     const result = validateSales(form, existingRecords, editingId)
     setValidation(result)
-
     if (result.errors.length > 0) return
-
     if (result.warnings.length > 0) {
       const msg = result.warnings.join('\n') + '\n\n警告を確認した上で保存しますか？'
       if (!confirm(msg)) return
     }
-
     setSaving(true)
     try { await onSave(form) } finally { setSaving(false) }
   }
 
+  // record_type に応じたラベル
+  const revenueLabel = form.record_type === 'cancelled'
+    ? '売上金額（円）（キャンセル料）'
+    : form.record_type === 'normal' ? '売上金額（円）*' : '売上金額（円）'
+
+  const guideFeeLabel = form.record_type === 'cancelled'
+    ? 'ガイド費（円）（補償額）'
+    : form.record_type === 'normal' ? 'ガイド費（円）*' : 'ガイド費（円）'
+
   return (
     <form onSubmit={handleSubmit}>
+      {/* バリデーション結果（submitted後のみ表示） */}
       {submitted && <ValidationAlert result={validation} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+        {/* 実施日 */}
         <div className="form-row">
           <label className="label">実施日 *</label>
           <input className="input" type="date" value={form.tour_date}
             onChange={e => set('tour_date', e.target.value)} />
         </div>
 
+        {/* 種別 */}
         <div className="form-row">
           <label className="label">種別</label>
           <select className="input" value={form.record_type}
@@ -82,6 +93,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
           </select>
         </div>
 
+        {/* 案件名 */}
         <div className="form-row" style={{ gridColumn: '1 / -1' }}>
           <label className="label">案件名 *</label>
           <input className="input" type="text" placeholder="例：Tokyo day tour"
@@ -89,6 +101,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
             onChange={e => set('case_name', e.target.value)} />
         </div>
 
+        {/* 取引先名 */}
         <div className="form-row">
           <label className="label">取引先名 *</label>
           <input className="input" type="text" placeholder="例：Tourist Japan"
@@ -96,6 +109,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
             onChange={e => set('partner_name', e.target.value)} />
         </div>
 
+        {/* ガイド名 */}
         <div className="form-row">
           <label className="label">ガイド名 *</label>
           <input className="input" type="text" placeholder="例：Daniel Shaw"
@@ -103,6 +117,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
             onChange={e => set('guide_name', e.target.value)} />
         </div>
 
+        {/* 参加人数 */}
         <div className="form-row">
           <label className="label">参加人数</label>
           <input className="input" type="number" min={1}
@@ -110,25 +125,26 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
             onChange={e => set('pax', Number(e.target.value))} />
         </div>
 
+        {/* 売上金額 */}
         <div className="form-row">
-          <label className="label">
-            売上金額（円）{form.record_type === 'cancelled' ? '（キャンセル料）' : form.record_type === 'normal' ? ' *' : ''}
-          </label>
+          <label className="label">{revenueLabel}</label>
           <input className="input" type="number" min={0} step={1000}
             value={form.revenue ?? ''}
-            onChange={e => set('revenue', e.target.value === '' ? null : Number(e.target.value))} />
+            onChange={e => set('revenue', e.target.value === '' ? null : Number(e.target.value))}
+            style={submitted && form.record_type === 'normal' && !(form.revenue ?? 0)
+              ? { borderColor: '#DC2626' } : {}} />
         </div>
 
+        {/* ガイド費 */}
         <div className="form-row">
-          <label className="label">
-            ガイド費（円）{form.record_type === 'cancelled' ? '（補償額）' : form.record_type === 'normal' ? ' *' : ''}
-          </label>
+          <label className="label">{guideFeeLabel}</label>
           <input className="input" type="number" min={0} step={1000}
             value={form.guide_fee ?? ''}
             onChange={e => set('guide_fee', e.target.value === '' ? null : Number(e.target.value))} />
         </div>
       </div>
 
+      {/* 粗利プレビュー */}
       <div style={{
         display: 'flex', gap: 24, padding: '10px 14px', marginBottom: 14,
         background: grossProfit >= 0 ? '#F0FDF4' : '#FEF2F2',
@@ -139,9 +155,13 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
           ¥{grossProfit.toLocaleString()}
         </strong></span>
         <span>粗利率：<strong>{grossMargin}%</strong></span>
+        {form.record_type !== 'normal' && (
+          <span style={{ color: '#9CA3AF' }}>種別：{TYPE_LABELS[form.record_type]}</span>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+        {/* 入金状況 */}
         <div className="form-row">
           <label className="label">入金状況</label>
           <select className="input" value={form.payment_status}
@@ -152,6 +172,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
           </select>
         </div>
 
+        {/* 入金日 */}
         <div className="form-row">
           <label className="label">入金日</label>
           <input className="input" type="date"
@@ -159,6 +180,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
             onChange={e => set('payment_date', e.target.value || null)} />
         </div>
 
+        {/* 入金方法 */}
         <div className="form-row" style={{ gridColumn: '1 / -1' }}>
           <label className="label">入金方法</label>
           <select className="input" value={form.payment_method}
@@ -172,6 +194,7 @@ export default function SalesForm({ initial, editingId, existingRecords, onSave,
           </select>
         </div>
 
+        {/* メモ */}
         <div className="form-row" style={{ gridColumn: '1 / -1' }}>
           <label className="label">メモ</label>
           <textarea className="input" rows={2} placeholder="備考・特記事項"

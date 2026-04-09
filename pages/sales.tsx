@@ -24,14 +24,37 @@ const thisMonth = () => {
 }
 
 export default function SalesPage() {
-  const [records,      setRecords]      = useState<SalesRecord[]>([])
-  const [allRecords,   setAllRecords]   = useState<SalesRecord[]>([])  // 重複チェック用
-  const [loading,      setLoading]      = useState(true)
-  const [month,        setMonth]        = useState(thisMonth())
-  const [statusFilter, setStatusFilter] = useState<PaymentStatus | ''>('')
-  const [typeFilter,   setTypeFilter]   = useState<RecordType | ''>('')
-  const [modal,        setModal]        = useState<'add' | 'edit' | null>(null)
-  const [editing,      setEditing]      = useState<SalesRecord | null>(null)
+  const [records,         setRecords]         = useState<SalesRecord[]>([])
+  const [allRecords,      setAllRecords]       = useState<SalesRecord[]>([])
+  const [cancelledIds,    setCancelledIds]     = useState<Set<string>>(new Set()) // キャンセル登録済みのsales_id
+  const [loading,         setLoading]         = useState(true)
+  // 期間フィルター
+  const [dateFrom,        setDateFrom]        = useState('')
+  const [dateTo,          setDateTo]          = useState('')
+  // 月フィルター（期間未指定時）
+  const [month,           setMonth]           = useState(thisMonth())
+  const [statusFilter,    setStatusFilter]    = useState<PaymentStatus | ''>('')
+  const [typeFilter,      setTypeFilter]      = useState<RecordType | ''>('')
+  const [modal,           setModal]           = useState<'add' | 'edit' | null>(null)
+  const [editing,         setEditing]         = useState<SalesRecord | null>(null)
+
+  const usingDateRange = !!(dateFrom || dateTo)
+
+  // 重複チェック用全件 + キャンセル登録済みIDは独立取得
+  useEffect(() => {
+    supabase.from('sales_records')
+      .select('id,tour_date,case_name,partner_name,guide_name')
+      .then(({ data }) => setAllRecords((data ?? []) as any))
+
+    supabase.from('cancellation_records')
+      .select('sales_record_id')
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const ids = new Set(data.map((c: any) => c.sales_record_id).filter(Boolean) as string[])
+          setCancelledIds(ids)
+        }
+      })
+  }, [])
 
   const fetchRecords = useCallback(async () => {
     setLoading(true)
@@ -40,7 +63,10 @@ export default function SalesPage() {
       .select('*')
       .order('tour_date', { ascending: false })
 
-    if (month) {
+    if (usingDateRange) {
+      if (dateFrom) q = q.gte('tour_date', dateFrom)
+      if (dateTo)   q = q.lte('tour_date', dateTo)
+    } else if (month) {
       const [y, m] = month.split('-').map(Number)
       const start = `${y}-${String(m).padStart(2,'0')}-01`
       const end   = `${m === 12 ? y+1 : y}-${String(m === 12 ? 1 : m+1).padStart(2,'0')}-01`
@@ -51,17 +77,12 @@ export default function SalesPage() {
 
     const { data } = await q
     setRecords(data ?? [])
-
-    // 重複チェック用に全件取得（月フィルタなし）
-    const { data: all } = await supabase.from('sales_records').select('id,tour_date,case_name,partner_name,guide_name')
-    setAllRecords((all ?? []) as any)
     setLoading(false)
-  }, [month, statusFilter, typeFilter])
+  }, [month, dateFrom, dateTo, statusFilter, typeFilter, usingDateRange])
 
   useEffect(() => { fetchRecords() }, [fetchRecords])
 
   async function handleSave(input: SalesInput) {
-    // gross_profit をリクエストに含めない
     const { gross_profit, ...safeInput } = input as any
     if (modal === 'edit' && editing) {
       const { error } = await supabase.from('sales_records').update(safeInput).eq('id', editing.id)
@@ -81,13 +102,18 @@ export default function SalesPage() {
     fetchRecords()
   }
 
+  function clearDateRange() {
+    setDateFrom('')
+    setDateTo('')
+  }
+
   const totalRevenue     = records.reduce((s, r) => s + (r.revenue ?? 0), 0)
   const totalGuideFee    = records.reduce((s, r) => s + (r.guide_fee ?? 0), 0)
   const totalGrossProfit = records.reduce((s, r) => s + (r.gross_profit ?? 0), 0)
   const grossMargin      = totalRevenue > 0 ? Math.round(totalGrossProfit / totalRevenue * 100) : 0
-  const unpaidAmount     = records.filter(r => r.payment_status !== 'paid').reduce((s, r) => s + (r.revenue ?? 0), 0)
+  const unpaidAmount     = records
+    .filter(r => r.payment_status !== 'paid').reduce((s, r) => s + (r.revenue ?? 0), 0)
 
-  // SalesFormに渡す既存レコードリスト（重複チェック用）
   const forDupCheck = allRecords.map(r => ({
     id: r.id, tour_date: r.tour_date, case_name: r.case_name,
     partner_name: r.partner_name, guide_name: r.guide_name,
@@ -106,25 +132,43 @@ export default function SalesPage() {
 
       {/* フィルター */}
       <div className="filter-bar">
-        <div>
-          <label className="label" style={{ display: 'inline', marginRight: 6 }}>月</label>
-          <input type="month" className="input" value={month}
-            onChange={e => setMonth(e.target.value)} style={{ width: 150 }} />
+        {/* 期間指定（優先） */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className="label" style={{ display: 'inline', marginRight: 4, whiteSpace: 'nowrap' }}>期間</label>
+          <input type="date" className="input" value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)} style={{ width: 140 }} />
+          <span style={{ color: '#9CA3AF', fontSize: 13 }}>〜</span>
+          <input type="date" className="input" value={dateTo}
+            onChange={e => setDateTo(e.target.value)} style={{ width: 140 }} />
+          {usingDateRange && (
+            <button className="btn btn-secondary btn-sm" onClick={clearDateRange}>クリア</button>
+          )}
         </div>
+
+        {/* 月フィルター（期間未指定時のみ） */}
+        {!usingDateRange && (
+          <div>
+            <label className="label" style={{ display: 'inline', marginRight: 6 }}>月</label>
+            <input type="month" className="input" value={month}
+              onChange={e => setMonth(e.target.value)} style={{ width: 150 }} />
+          </div>
+        )}
+
         <div>
-          <label className="label" style={{ display: 'inline', marginRight: 6 }}>入金状況</label>
+          <label className="label" style={{ display: 'inline', marginRight: 6 }}>入金</label>
           <select className="input" value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value as PaymentStatus | '')} style={{ width: 120 }}>
+            onChange={e => setStatusFilter(e.target.value as PaymentStatus | '')} style={{ width: 110 }}>
             <option value="">すべて</option>
             {(Object.entries(PAYMENT_LABEL) as [PaymentStatus, string][]).map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
             ))}
           </select>
         </div>
+
         <div>
           <label className="label" style={{ display: 'inline', marginRight: 6 }}>種別</label>
           <select className="input" value={typeFilter}
-            onChange={e => setTypeFilter(e.target.value as RecordType | '')} style={{ width: 120 }}>
+            onChange={e => setTypeFilter(e.target.value as RecordType | '')} style={{ width: 110 }}>
             <option value="">すべて</option>
             <option value="normal">通常</option>
             <option value="cancelled">キャンセル</option>
@@ -133,6 +177,16 @@ export default function SalesPage() {
         </div>
         <button className="btn btn-secondary btn-sm" onClick={fetchRecords}>更新</button>
       </div>
+
+      {/* 期間指定中バッジ */}
+      {usingDateRange && (
+        <div style={{
+          fontSize: 12, color: '#2563EB', marginBottom: 8, padding: '4px 8px',
+          background: '#DBEAFE', borderRadius: 6, display: 'inline-block',
+        }}>
+          期間指定中: {dateFrom || '—'} 〜 {dateTo || '—'}
+        </div>
+      )}
 
       {/* 集計バー */}
       <div className="summary-bar" style={{ marginBottom: 16 }}>
@@ -143,6 +197,10 @@ export default function SalesPage() {
         <div className="summary-item">
           <span className="summary-label">売上合計</span>
           <span className="summary-value">{fmt(totalRevenue)}</span>
+        </div>
+        <div className="summary-item">
+          <span className="summary-label">ガイド費合計</span>
+          <span className="summary-value">{fmt(totalGuideFee)}</span>
         </div>
         <div className="summary-item">
           <span className="summary-label">粗利合計</span>
@@ -168,7 +226,7 @@ export default function SalesPage() {
           <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>読み込み中...</div>
         ) : records.length === 0 ? (
           <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>
-            データがありません
+            {usingDateRange ? '指定期間のデータがありません' : 'データがありません'}
           </div>
         ) : (
           <div className="table-wrap">
@@ -191,6 +249,7 @@ export default function SalesPage() {
                 {records.map(r => {
                   const margin = (r.revenue ?? 0) > 0
                     ? Math.round((r.gross_profit ?? 0) / r.revenue * 100) : 0
+                  const hasCancellation = cancelledIds.has(r.id)
                   return (
                     <tr key={r.id}
                       style={r.record_type === 'cancelled' ? { background: '#FFF7ED' } :
@@ -199,14 +258,27 @@ export default function SalesPage() {
                       <td>
                         <div style={{ fontWeight: 500 }}>{r.case_name}</div>
                         {r.memo && <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>{r.memo}</div>}
+                        {/* キャンセル登録済み表示 */}
+                        {r.record_type === 'cancelled' && hasCancellation && (
+                          <div style={{ fontSize: 11, color: '#15803D', marginTop: 2, fontWeight: 500 }}>
+                            ✓ キャンセル登録済み
+                          </div>
+                        )}
+                        {r.record_type === 'cancelled' && !hasCancellation && (
+                          <div style={{ fontSize: 11, color: '#B45309', marginTop: 2 }}>
+                            △ キャンセル詳細未登録
+                          </div>
+                        )}
                       </td>
                       <td style={{ color: '#6B7280' }}>{r.partner_name || '—'}</td>
                       <td style={{ color: '#6B7280' }}>{r.guide_name || '—'}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         {r.revenue != null ? fmt(r.revenue) : '—'}
                       </td>
-                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap',
-                                   color: (r.gross_profit ?? 0) >= 0 ? '#15803D' : '#DC2626', fontWeight: 500 }}>
+                      <td style={{
+                        textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 500,
+                        color: (r.gross_profit ?? 0) >= 0 ? '#15803D' : '#DC2626',
+                      }}>
                         {r.gross_profit != null ? fmt(r.gross_profit) : '—'}
                       </td>
                       <td style={{ textAlign: 'right' }}>{margin}%</td>

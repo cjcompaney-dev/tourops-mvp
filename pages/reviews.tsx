@@ -13,6 +13,10 @@ export default function ReviewsPage() {
   const [records,      setRecords]      = useState<ReviewRecord[]>([])
   const [salesRecords, setSalesRecords] = useState<SalesRecord[]>([])
   const [loading,      setLoading]      = useState(true)
+  // 期間フィルター
+  const [dateFrom,     setDateFrom]     = useState('')
+  const [dateTo,       setDateTo]       = useState('')
+  // 月フィルター（期間指定がない場合に使用）
   const [month,        setMonth]        = useState(thisMonth())
   const [guideFilter,  setGuideFilter]  = useState('')
   const [hasFilter,    setHasFilter]    = useState<'all' | 'yes' | 'no'>('all')
@@ -21,34 +25,17 @@ export default function ReviewsPage() {
   const [tab,          setTab]          = useState<'list' | 'summary'>('list')
   const [allGuides,    setAllGuides]    = useState<string[]>([])
 
-  const fetchRecords = useCallback(async () => {
-    setLoading(true)
-    let q = supabase.from('review_records').select('*').order('tour_date', { ascending: false })
+  // 期間指定中かどうか
+  const usingDateRange = !!(dateFrom || dateTo)
 
-    if (month) {
-      const [y, m] = month.split('-').map(Number)
-      const start = `${y}-${String(m).padStart(2,'0')}-01`
-      const end   = `${m === 12 ? y+1 : y}-${String(m===12?1:m+1).padStart(2,'0')}-01`
-      q = q.gte('tour_date', start).lt('tour_date', end)
-    }
-    if (guideFilter) q = q.eq('guide_name', guideFilter)
-    if (hasFilter === 'yes') q = q.eq('has_review', true)
-    if (hasFilter === 'no')  q = q.eq('has_review', false)
-
-    const { data } = await q
-    setRecords(data ?? [])
-
-    // 売上台帳データを取得（照合用）
-    const { data: sales } = await supabase
-      .from('sales_records')
+  // salesRecordsは独立して1回だけ取得（fetchRecordsのたびに再取得しない）
+  useEffect(() => {
+    supabase.from('sales_records')
       .select('id,tour_date,case_name,partner_name,guide_name')
-    setSalesRecords((sales ?? []) as any)
+      .then(({ data }) => setSalesRecords((data ?? []) as any))
+  }, [])
 
-    setLoading(false)
-  }, [month, guideFilter, hasFilter])
-
-  useEffect(() => { fetchRecords() }, [fetchRecords])
-
+  // ガイド一覧も独立取得
   useEffect(() => {
     supabase.from('review_records').select('guide_name')
       .then(({ data }) => {
@@ -56,6 +43,35 @@ export default function ReviewsPage() {
         setAllGuides(names.sort())
       })
   }, [])
+
+  const fetchRecords = useCallback(async () => {
+    setLoading(true)
+    let q = supabase
+      .from('review_records')
+      .select('*')
+      .order('tour_date', { ascending: false })
+
+    if (usingDateRange) {
+      // 期間指定優先
+      if (dateFrom) q = q.gte('tour_date', dateFrom)
+      if (dateTo)   q = q.lte('tour_date', dateTo)
+    } else if (month) {
+      // 月フィルター
+      const [y, m] = month.split('-').map(Number)
+      const start = `${y}-${String(m).padStart(2,'0')}-01`
+      const end   = `${m === 12 ? y+1 : y}-${String(m===12?1:m+1).padStart(2,'0')}-01`
+      q = q.gte('tour_date', start).lt('tour_date', end)
+    }
+    if (guideFilter)          q = q.eq('guide_name', guideFilter)
+    if (hasFilter === 'yes')  q = q.eq('has_review', true)
+    if (hasFilter === 'no')   q = q.eq('has_review', false)
+
+    const { data } = await q
+    setRecords(data ?? [])
+    setLoading(false)
+  }, [month, dateFrom, dateTo, guideFilter, hasFilter, usingDateRange])
+
+  useEffect(() => { fetchRecords() }, [fetchRecords])
 
   async function handleSave(input: ReviewInput) {
     if (modal === 'edit' && editing) {
@@ -66,6 +82,16 @@ export default function ReviewsPage() {
       if (error) { alert('追加エラー: ' + error.message); return }
     }
     setModal(null); setEditing(null)
+
+    // 保存したレコードの月にフィルターを合わせる（月フィルター使用時のみ）
+    if (!usingDateRange && input.tour_date) {
+      const savedMonth = input.tour_date.slice(0, 7) // YYYY-MM
+      if (savedMonth !== month) {
+        setMonth(savedMonth)
+        // monthが変わるとfetchRecordsが再実行されるのでここではreturn
+        return
+      }
+    }
     fetchRecords()
   }
 
@@ -76,17 +102,22 @@ export default function ReviewsPage() {
     fetchRecords()
   }
 
+  function clearDateRange() {
+    setDateFrom('')
+    setDateTo('')
+  }
+
   // 集計
-  const totalCount  = records.length
-  const reviewCount = records.filter(r => r.has_review).length
-  const reviewRate  = totalCount > 0 ? Math.round(reviewCount / totalCount * 100) : 0
-  const ratings     = records.filter(r => r.rating !== null).map(r => r.rating!)
-  const avgRating   = ratings.length > 0
+  const totalCount     = records.length
+  const reviewCount    = records.filter(r => r.has_review).length
+  const reviewRate     = totalCount > 0 ? Math.round(reviewCount / totalCount * 100) : 0
+  const ratings        = records.filter(r => r.rating !== null).map(r => r.rating!)
+  const avgRating      = ratings.length > 0
     ? Math.round(ratings.reduce((s, v) => s + v, 0) / ratings.length * 10) / 10 : null
   const lowRatingCount = records.filter(r => r.rating !== null && r.rating <= 3).length
 
   // ガイド別集計
-  const guideNames = [...new Set(records.map(r => r.guide_name).filter(Boolean))]
+  const guideNames   = [...new Set(records.map(r => r.guide_name).filter(Boolean))]
   const guideSummary = guideNames.map(name => {
     const rows     = records.filter(r => r.guide_name === name)
     const rCount   = rows.filter(r => r.has_review).length
@@ -121,11 +152,30 @@ export default function ReviewsPage() {
 
       {/* フィルター */}
       <div className="filter-bar">
-        <div>
-          <label className="label" style={{ display: 'inline', marginRight: 6 }}>月</label>
-          <input type="month" className="input" value={month}
-            onChange={e => setMonth(e.target.value)} style={{ width: 150 }} />
+        {/* 期間指定（優先） */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className="label" style={{ display: 'inline', marginRight: 4, whiteSpace: 'nowrap' }}>期間</label>
+          <input type="date" className="input" value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)} style={{ width: 140 }}
+            placeholder="開始日" />
+          <span style={{ color: '#9CA3AF', fontSize: 13 }}>〜</span>
+          <input type="date" className="input" value={dateTo}
+            onChange={e => setDateTo(e.target.value)} style={{ width: 140 }}
+            placeholder="終了日" />
+          {usingDateRange && (
+            <button className="btn btn-secondary btn-sm" onClick={clearDateRange}>クリア</button>
+          )}
         </div>
+
+        {/* 月フィルター（期間未指定時のみ有効） */}
+        {!usingDateRange && (
+          <div>
+            <label className="label" style={{ display: 'inline', marginRight: 6 }}>月</label>
+            <input type="month" className="input" value={month}
+              onChange={e => setMonth(e.target.value)} style={{ width: 150 }} />
+          </div>
+        )}
+
         <div>
           <label className="label" style={{ display: 'inline', marginRight: 6 }}>ガイド</label>
           <select className="input" value={guideFilter}
@@ -134,6 +184,7 @@ export default function ReviewsPage() {
             {allGuides.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
         </div>
+
         <div>
           <label className="label" style={{ display: 'inline', marginRight: 6 }}>レビュー</label>
           <select className="input" value={hasFilter}
@@ -145,6 +196,16 @@ export default function ReviewsPage() {
         </div>
         <button className="btn btn-secondary btn-sm" onClick={fetchRecords}>更新</button>
       </div>
+
+      {/* 期間指定中の表示 */}
+      {usingDateRange && (
+        <div style={{
+          fontSize: 12, color: '#2563EB', marginBottom: 8, padding: '4px 8px',
+          background: '#DBEAFE', borderRadius: 6, display: 'inline-block',
+        }}>
+          期間指定中: {dateFrom || '—'} 〜 {dateTo || '—'}
+        </div>
+      )}
 
       {/* 集計バー */}
       <div className="summary-bar" style={{ marginBottom: 16 }}>
@@ -171,7 +232,7 @@ export default function ReviewsPage() {
         )}
         {lowRatingCount > 0 && (
           <div className="summary-item">
-            <span className="summary-label">低評価（3以下）</span>
+            <span className="summary-label">低評価（★3以下）</span>
             <span className="summary-value" style={{ color: '#DC2626' }}>{lowRatingCount}件</span>
           </div>
         )}
@@ -192,13 +253,15 @@ export default function ReviewsPage() {
         ))}
       </div>
 
-      {/* 一覧タブ */}
+      {/* 一覧 */}
       {tab === 'list' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>読み込み中...</div>
           ) : records.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>データがありません</div>
+            <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>
+              {usingDateRange ? '指定期間のデータがありません' : `${month}のデータがありません`}
+            </div>
           ) : (
             <div className="table-wrap">
               <table>
@@ -224,7 +287,10 @@ export default function ReviewsPage() {
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         {r.rating !== null ? (
-                          <span style={{ color: r.rating <= 3 ? '#DC2626' : undefined, fontWeight: r.rating <= 3 ? 600 : undefined }}>
+                          <span style={{
+                            color: r.rating <= 3 ? '#DC2626' : undefined,
+                            fontWeight: r.rating <= 3 ? 600 : undefined,
+                          }}>
                             ★ {r.rating}{r.rating <= 3 ? ' ⚠' : ''}
                           </span>
                         ) : '—'}
@@ -258,7 +324,7 @@ export default function ReviewsPage() {
         </div>
       )}
 
-      {/* ガイド別集計タブ */}
+      {/* ガイド別集計 */}
       {tab === 'summary' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           {guideSummary.length === 0 ? (
@@ -290,9 +356,7 @@ export default function ReviewsPage() {
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         {g.avg !== null ? (
-                          <span style={{ color: g.avg <= 3 ? '#DC2626' : undefined }}>
-                            ★ {g.avg}
-                          </span>
+                          <span style={{ color: g.avg <= 3 ? '#DC2626' : undefined }}>★ {g.avg}</span>
                         ) : '—'}
                       </td>
                       <td style={{ textAlign: 'right' }}>

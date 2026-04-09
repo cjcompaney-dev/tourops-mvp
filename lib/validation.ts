@@ -4,7 +4,7 @@
  * フォームとDB両方から呼べるよう、Supabase依存なし・純粋関数で記述
  */
 
-import { SalesInput, ReviewInput, ValidationResult } from '../types'
+import { SalesInput, ReviewInput, ValidationResult, CancelPolicy } from '../types'
 
 // ─── 表記ゆれマップ ────────────────────────────────────────
 const PARTNER_VARIANTS: Record<string, string[]> = {
@@ -29,10 +29,12 @@ export function validateSales(
   if (!input.guide_name?.trim())   errors.push('ガイド名は必須です')
 
   if (input.record_type === 'normal') {
-    if (input.revenue == null || input.revenue === undefined)
-      errors.push('通常案件は売上金額が必須です')
-    if (input.guide_fee == null || input.guide_fee === undefined)
-      errors.push('通常案件はガイド費が必須です')
+    // revenue: null / undefined / 0 すべてエラー
+    if (input.revenue == null || (input.revenue as any) === '' || input.revenue === 0)
+      errors.push('通常案件の売上金額は1円以上を入力してください')
+    // guide_fee: null / undefined はエラー（0は許容）
+    if (input.guide_fee == null)
+      errors.push('通常案件はガイド費を入力してください（未発生の場合は0）')
   }
 
   // B. 型・範囲チェック
@@ -83,7 +85,7 @@ export function validateSales(
     }
   }
 
-  // F. 重複チェック（警告）
+  // F. 重複チェック（エラー：同一条件は保存禁止）
   if (input.tour_date && input.case_name && input.partner_name && input.guide_name) {
     const dup = existingRecords.find(r =>
       r.tour_date     === input.tour_date &&
@@ -92,7 +94,7 @@ export function validateSales(
       r.guide_name    === input.guide_name &&
       r.id !== editingId
     )
-    if (dup) warnings.push('同じ日付・案件名・取引先・ガイドの記録が既に存在します（重複の可能性）')
+    if (dup) errors.push('同じ日付・案件名・取引先・ガイドの記録が既に存在します（重複）')
   }
 
   return { errors, warnings }
@@ -152,6 +154,73 @@ export function validateReview(
   return { errors, warnings }
 }
 
+// ─── キャンセル金額自動提案 ───────────────────────────────
+export interface CancelSuggestion {
+  partnerAmount:  number        // 取引先から徴収する提案額（円）
+  guideAmount:    number        // ガイドへ支払う提案額（円）
+  partnerTier:    string        // 適用したタイミング区分名
+  guideTier:      string        // 同上（ガイド側）
+  partnerRatePct: number | null // 適用率（%）
+  guideRatePct:   number | null // 同上（ガイド側）
+}
+
+export function suggestCancelAmount(
+  partnerName: string,
+  hoursBeforeStart: number | null,
+  originalRevenue: number,
+  originalGuideFee: number,
+  policies: {
+    target_type: string
+    target_name: string
+    tier_name: string
+    hours_before_min: number
+    hours_before_max: number | null
+    rate_pct: number
+  }[]
+): CancelSuggestion {
+  const hours = hoursBeforeStart ?? 0
+
+  // ポリシーを検索する内部関数
+  // target_name が一致するポリシーを優先、なければ __all_guides__ を使用
+  function findPolicy(targetType: string, name: string) {
+    // 名前一致を優先
+    const matched = policies.filter(p =>
+      p.target_type === targetType &&
+      p.target_name === name &&
+      hours >= p.hours_before_min &&
+      (p.hours_before_max === null || hours < p.hours_before_max)
+    )
+    if (matched.length > 0) return matched[0]
+
+    // 全ガイド共通ポリシーにフォールバック（guide のみ）
+    if (targetType === 'guide') {
+      const fallback = policies.filter(p =>
+        p.target_type === 'guide' &&
+        p.target_name === '__all_guides__' &&
+        hours >= p.hours_before_min &&
+        (p.hours_before_max === null || hours < p.hours_before_max)
+      )
+      if (fallback.length > 0) return fallback[0]
+    }
+    return null
+  }
+
+  const partnerPolicy = findPolicy('partner', partnerName)
+  const guidePolicy   = findPolicy('guide', '__all_guides__')
+
+  const partnerRatePct = partnerPolicy?.rate_pct ?? null
+  const guideRatePct   = guidePolicy?.rate_pct   ?? null
+
+  return {
+    partnerAmount:  partnerRatePct !== null ? Math.round(originalRevenue  * partnerRatePct / 100) : 0,
+    guideAmount:    guideRatePct   !== null ? Math.round(originalGuideFee * guideRatePct   / 100) : 0,
+    partnerTier:    partnerPolicy?.tier_name ?? '（ポリシーなし）',
+    guideTier:      guidePolicy?.tier_name   ?? '（ポリシーなし）',
+    partnerRatePct,
+    guideRatePct,
+  }
+}
+
 // ─── ダッシュボード警告集計 ───────────────────────────────
 export function computeDashboardAlerts(
   sales: { payment_status: string; payment_date: string | null; payment_method: string; tour_date: string; case_name: string; partner_name: string; guide_name: string; record_type: string }[],
@@ -188,4 +257,71 @@ export function computeDashboardAlerts(
   ).length
 
   return { unpaidCount, paymentMismatch, salesDuplicates, lowRatingReviews, reviewMissing, cancelMismatch }
+}
+
+// ─── キャンセル金額自動提案 ───────────────────────────────
+
+export interface CancelSuggestion {
+  partnerAmount:  number        // 取引先から徴収する提案額
+  guideAmount:    number        // ガイドへ支払う提案額
+  partnerTier:    string        // 適用したポリシー区分名
+  guideTier:      string        // 適用したポリシー区分名
+  partnerRate:    number | null // 適用率（%）
+  guideRate:      number | null // 適用率（%）
+}
+
+/**
+ * キャンセル金額を自動提案する
+ * - '__all_guides__' は全ガイド共通ポリシーとして扱う
+ * - hours_before_max が null のときは「その時間以上」を意味する
+ */
+export function suggestCancelAmount(
+  partnerName:       string,
+  guideName:         string,
+  hoursBeforeStart:  number,
+  originalRevenue:   number,
+  originalGuideFee:  number,
+  policies:          CancelPolicy[]
+): CancelSuggestion {
+
+  function findPolicy(type: 'partner' | 'guide', name: string): CancelPolicy | null {
+    // 完全一致を優先、なければ __all_guides__ を探す
+    const exact = policies.find(p =>
+      p.target_type === type &&
+      p.target_name === name &&
+      p.hours_before_min <= hoursBeforeStart &&
+      (p.hours_before_max === null || hoursBeforeStart < p.hours_before_max)
+    )
+    if (exact) return exact
+
+    if (type === 'guide') {
+      return policies.find(p =>
+        p.target_type === 'guide' &&
+        p.target_name === '__all_guides__' &&
+        p.hours_before_min <= hoursBeforeStart &&
+        (p.hours_before_max === null || hoursBeforeStart < p.hours_before_max)
+      ) ?? null
+    }
+    return null
+  }
+
+  const partnerPolicy = findPolicy('partner', partnerName)
+  const guidePolicy   = findPolicy('guide',   guideName)
+
+  const partnerAmount = partnerPolicy
+    ? Math.round(originalRevenue  * partnerPolicy.rate_pct / 100)
+    : 0
+
+  const guideAmount = guidePolicy
+    ? Math.round(originalGuideFee * guidePolicy.rate_pct / 100)
+    : 0
+
+  return {
+    partnerAmount,
+    guideAmount,
+    partnerTier:  partnerPolicy?.tier_name ?? '該当ポリシーなし',
+    guideTier:    guidePolicy?.tier_name   ?? '該当ポリシーなし',
+    partnerRate:  partnerPolicy?.rate_pct  ?? null,
+    guideRate:    guidePolicy?.rate_pct    ?? null,
+  }
 }
